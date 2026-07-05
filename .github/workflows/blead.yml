@@ -1,0 +1,24 @@
+name: blead
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          repository: perl/perl5
+          ref: blead
+          path: perl5
+      - name: build
+        run: |
+          cd perl5
+          ./Configure -des -Dusedevel >/dev/null
+          make -j4 >/dev/null 2>&1
+          ./perl -v | grep version
+      - name: bench
+        run: cd perl5 && ./perl -Ilib ../leak-bench.pl 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
