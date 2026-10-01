@@ -126,6 +126,44 @@ if (saveifp) {		/* must use old fp? */
 つまりこの挙動は意図的な保証ではなく、ソース自身が直すべきものとして
 印を付けています。
 
+## Earlier reports（既存の報告）
+
+この特例自体は新しい話ではありません。繰り返し報告され、いずれも
+open のままです：
+
+- #7854 (2005), open sometimes ignores perlio layers when duping
+- #8998 (2007), Layers not applied to reopened STDOUT
+- #12249 (2012), Reopening filehandles can clobber PerlIO layers
+- #14229 (2014), copy encoding settings when duping file descriptors (?)
+- #15392 (2016), IO layer for STDERR not set
+- #21881 (2024), Reopening STDOUT to in-memory scalar interferes with "-|" piping
+
+Leon Timmermans は 2012 年に #12249 で既に `Eeek - FIXME !!!` を引用
+し、2001 年から残っていることを指摘しています。
+
+#12249 は実のところ同じ特例を反対側から見たものです。あちらは再
+オープンで**出力側**のレイヤーが失われるという報告で、本報告は
+**入力側**のレイヤーが保たれて積み上がるという話です。あちらは今も
+再現します。再現しないように見えてきた理由は、答えが STDOUT の接続
+先に依存することです：
+
+| STDOUT の先 | 入力側 | 出力側 | 5.12.5 – 5.44.0 |
+|---|---|---|---|
+| キャラクタデバイス（端末、`/dev/null`） | 保持 | **消失** | 10 バージョン全て消失 |
+| 通常ファイル | 保持 | 保持 | 10 バージョン全て保持 |
+| パイプ | 保持 | 保持 | 10 バージョン全て保持 |
+
+`S_openn_cleanup()` は `saveofp` が `saveifp` と別の PerlIO オブジェ
+クトであるときにそれを閉じるため、出力側のレイヤーが失われます。
+これを再測定する人は、結果を STDOUT 以外に書いてください。試験対象
+のハンドルに print すると観測結果が変わります（私は最初それで誤った
+結論を出しました）。
+
+したがって本報告で新しいのは挙動ではなく**帰結**です。#10454 と
+組み合わさることで、ごく普通のリダイレクト＆復元のループが際限なく
+蓄積する（時間は二次関数、メモリは無制限）こと、そしてそうなるのは
+標準ハンドルだけであること、の 2 点です。
+
 ## Discussion（議論）
 
 `binmode :encoding` の非冪等性は #10454 で、単体では意図された挙動

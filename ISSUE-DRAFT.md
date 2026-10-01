@@ -146,6 +146,45 @@ if (saveifp) {		/* must use old fp? */
 So the behaviour is not a deliberate guarantee; the source marks it as
 something to fix.
 
+## Earlier reports
+
+The special case itself is not news.  It has come up repeatedly, and
+each report is still open:
+
+- #7854 (2005), open sometimes ignores perlio layers when duping
+- #8998 (2007), Layers not applied to reopened STDOUT
+- #12249 (2012), Reopening filehandles can clobber PerlIO layers
+- #14229 (2014), copy encoding settings when duping file descriptors (?)
+- #15392 (2016), IO layer for STDERR not set
+- #21881 (2024), Reopening STDOUT to in-memory scalar interferes with "-|" piping
+
+Leon Timmermans already quoted the `Eeek - FIXME !!!` comment in
+#12249, back in 2012, noting that it had been there since 2001.
+
+#12249 is in fact this same special case seen from the other side: it
+reports the output-side layers being *lost* on re-open, where this
+report is about the input-side layers being *kept* and piling up.  It
+still reproduces, and what has made it look unreproducible is that the
+answer depends on what STDOUT is attached to:
+
+| STDOUT is | input side | output side | 5.12.5 - 5.44.0 |
+|---|---|---|---|
+| a character device (terminal, `/dev/null`) | kept | **lost** | all ten clobbered |
+| a regular file | kept | kept | all ten preserved |
+| a pipe | kept | kept | all ten preserved |
+
+`S_openn_cleanup()` closes `saveofp` when it is a separate PerlIO
+object from `saveifp`, which is what takes the output-side layers away.
+Anyone re-measuring this should write the result somewhere other than
+STDOUT; printing to the handle under test changes what you observe,
+which cost me a wrong conclusion first time round.
+
+What is new here is therefore the consequence rather than the
+behaviour: that combined with #10454 it makes an ordinary
+redirect-and-restore loop accumulate without bound — quadratic in time,
+unbounded in memory — and that the standard handles are alone in doing
+so.
+
 ## Discussion
 
 The non-idempotency of `binmode :encoding` is #10454 and arguably
