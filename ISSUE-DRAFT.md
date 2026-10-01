@@ -247,6 +247,20 @@ The accumulation accounted for essentially the whole gap: raw mode
 was 42x faster than `:encoding` only because of it, and is now an
 optional optimization rather than a required workaround.
 
+What makes the cycle run so often is that the callers execute per
+fragment of the input rather than per program run:
+
+- `App::Greple::tee` pipes each matched region of a file through a
+  filter command, with nofork on by default — once per region;
+- `App::Greple::md`, which renders Markdown for the terminal, calls
+  `App::ansicolumn` in-process for every table it formats, again with
+  nofork on by default.
+
+A Markdown file with a few dozen tables and a few hundred matched
+regions therefore puts several hundred redirect-and-restore cycles
+through a single process.  The second of those callers asks for raw
+mode, which is what the 42x gap above used to make necessary.
+
 Any long-running program using the classic save/redirect/restore
 idiom with an encoding layer will hit this.
 
