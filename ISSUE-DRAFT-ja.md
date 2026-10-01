@@ -106,6 +106,9 @@ binmode の非冪等性は #10454 です — が、組み合わさると、ご�
 encoding レイヤーを積み上げ、プロセス内実行が実行ごとに fork するよ
 り遅くなり、メモリも増え続けていました。当初はリークに見え、モジュー
 ルのドキュメントにもそう書いていましたが、原因はこの蓄積でした。
+モジュール側の記述は
+https://metacpan.org/pod/Command::Run#PerlIO-Encoding-Layer-Accumulation
+にあります。
 
 現在は復元の直前にレイヤー変更を巻き戻しています（最上位が encoding
 レイヤーであることを確認して `binmode FH, ':pop'`）。1.02 でリリース

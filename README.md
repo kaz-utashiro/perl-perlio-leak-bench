@@ -84,7 +84,9 @@ Present unchanged in every release tested (5.12.5 through blead).
 
 Found in [Command::Run](https://github.com/tecolicom/Command-Run),
 whose nofork mode redirects STDIN/STDOUT to temporary files on each
-execution — see its "PerlIO Encoding Layer Accumulation" section, and
+execution — see its
+["PerlIO Encoding Layer Accumulation"](https://metacpan.org/pod/Command::Run#PerlIO-Encoding-Layer-Accumulation)
+section, and
 `nofork-tmpfile-reuse.md` for the longer Japanese write-up.  It looked
 like a leak there at first, hence this repository's name; the cause is
 accumulation.  Command::Run 1.02 works around it by popping the

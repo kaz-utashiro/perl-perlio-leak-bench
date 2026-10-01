@@ -106,7 +106,9 @@ which redirects STDIN/STDOUT to temporary files on each in-process
 carried thousands of stacked encoding layers, the in-process path had
 become slower than fork-per-execution, and memory kept growing.  It
 looked like a leak at first, and the module's documentation described
-it as one, until the cause turned out to be this accumulation.
+it as one, until the cause turned out to be this accumulation.  The
+module documents the behaviour at
+https://metacpan.org/pod/Command::Run#PerlIO-Encoding-Layer-Accumulation
 
 The module now unwinds the layer change before restoring the handles
 — check that the topmost layer is the encoding layer, then
