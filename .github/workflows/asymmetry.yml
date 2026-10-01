@@ -32,3 +32,15 @@ jobs:
         run: |
           perl handle-asymmetry.pl >/dev/null 2>&1 || true
           cat ${TMPDIR:-/tmp}/asym-*.out | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: reopen probe, STDOUT on a regular file
+        run: |
+          PROBE_SLOT=file perl reopen-layers.pl > ${TMPDIR:-/tmp}/stdout-is-a-file 2>/dev/null || true
+          cat ${TMPDIR:-/tmp}/reopen-file-*.out | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: reopen probe, STDOUT on a pipe
+        run: |
+          PROBE_SLOT=pipe perl reopen-layers.pl 2>/dev/null | cat > /dev/null || true
+          cat ${TMPDIR:-/tmp}/reopen-pipe-*.out | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: reopen probe, STDOUT on a character device
+        run: |
+          PROBE_SLOT=null perl reopen-layers.pl > /dev/null 2>/dev/null || true
+          cat ${TMPDIR:-/tmp}/reopen-null-*.out | tee -a "$GITHUB_STEP_SUMMARY"
