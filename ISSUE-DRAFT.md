@@ -204,11 +204,22 @@ Possible directions:
   layer instead of stacking (#10454) — but that silently takes away a
   layer the caller set when the two encodings happen to match, so it
   is the riskier of the two;
-- or at least document the special case, which is currently not
+- or, at a minimum, document the special case.  It is currently not
   mentioned under "Duping filehandles" in perlfunc, nor in PerlIO —
   whose description of open ("the handle will be opened with the
   layers specified by the `${^OPEN}` variable ... or the default layer
-  stack") reads as if the standard handles behaved like the rest.
+  stack") reads as if the standard handles behaved like the rest.  The
+  save-and-restore script given as the example under "Duping
+  filehandles" is itself the pattern that runs into this, which is
+  what the reporter of #12249 pointed out in 2012.
+
+Whatever is decided about the behaviour, the documentation part needs
+no decision, so here is a patch for it — a paragraph under "Duping
+filehandles" in perlfunc and a cross-reference in PerlIO:
+
+https://github.com/kaz-utashiro/perl-perlio-leak-bench/blob/main/doc-layers.patch
+
+Happy to turn it into a PR.
 
 ## Real-world impact
 

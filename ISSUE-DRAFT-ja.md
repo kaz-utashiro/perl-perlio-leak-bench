@@ -181,11 +181,21 @@ Leon Timmermans は 2012 年に #12249 で既に `Eeek - FIXME !!!` を引用
 - あるいは `:encoding` の push を既存の最上位 encoding レイヤーの
   置き換えにする（#10454）。ただし両者の encoding が一致した場合に
   呼び出し側が設定したレイヤーを黙って奪うので、こちらの方が危険です
-- 少なくともこの特例を文書化する。現在 perlfunc の "Duping
+- 最低限、この特例を文書化する。現在 perlfunc の "Duping
   filehandles" にも PerlIO にも記載がなく、PerlIO の open の説明
   （「レイヤーが明示されなければ `${^OPEN}` のレイヤー…またはデフォ
   ルトのレイヤースタックで開かれる」）は、標準ハンドルも他と同様に
-  振る舞うかのように読めます
+  振る舞うかのように読めます。しかも "Duping filehandles" の例として
+  載っている save/restore スクリプト自体がこの問題を踏む書き方で、
+  これは #12249 の報告者が 2012 年に指摘しています
+
+挙動をどうするかに関わらず、文書化の部分は判断を要しません。パッチを
+用意しました（perlfunc の "Duping filehandles" に 1 段落、PerlIO に
+相互参照）：
+
+https://github.com/kaz-utashiro/perl-perlio-leak-bench/blob/main/doc-layers.patch
+
+PR にするのも構いません。
 
 ## Real-world impact（実世界での影響）
 

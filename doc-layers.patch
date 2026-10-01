@@ -1,0 +1,38 @@
+--- a/pod/perlfunc.pod
++++ b/pod/perlfunc.pod
+@@ -5127,6 +5127,21 @@
+ 
+     print STDOUT "stdout 2\n";
+     print STDERR "stderr 2\n";
++
++Re-opening a filehandle over a dup normally gives it the PerlIO layer
++stack of the handle being duped.  The standard filehandles are an
++exception: when the handle being re-opened is on file descriptor 0, 1
++or 2, Perl keeps that handle's existing PerlIO object and dups the new
++descriptor underneath it, so its layers stay as they were rather than
++becoming the ones this C<open> would have given it.  This matters for
++the save-and-restore pattern above.  A layer pushed while the handle is
++redirected, say C<binmode STDOUT, ':encoding(utf8)'>, is still in place
++after the restore, and because pushing C<:encoding> does not replace an
++existing one, running the cycle repeatedly stacks one more layer each
++time; pop it with C<binmode STDOUT, ':pop'> before restoring.
++Conversely, where a handle's input and output sides are separate PerlIO
++objects, as they are for a terminal, the re-open discards the layers on
++the output side.
+ 
+ If you specify C<< '<&=X' >>, where C<X> is a file descriptor number
+ or a filehandle, then Perl will do an equivalent of C's L<fdopen(3)> of
+--- a/lib/PerlIO.pm
++++ b/lib/PerlIO.pm
+@@ -91,6 +91,11 @@
+ the handle will be opened with the default layer stack configured for that
+ architecture; see L</"Defaults and how to override them">.
+ 
++Re-opening a handle that is already open is an exception to this: it
++takes the layer stack of the handle it is duped from, except for the
++standard filehandles, which keep the layers they already had.  See
++L<perlfunc/"Duping filehandles">.
++
+ Some layers will automatically insert required lower level layers if not
+ present; for example C<:perlio> will insert C<:unix> below itself for low
+ level IO, and C<:encoding> will insert the platform defaults for buffered
