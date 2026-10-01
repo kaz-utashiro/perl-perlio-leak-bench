@@ -15,19 +15,30 @@ open STDOUT, '>&', $save;            # restore
 
 Two behaviors combine:
 
-1. Re-opening an existing filehandle over a dup (`open FH, '>&', ...`)
-   keeps the handle's current layer stack instead of resetting it.
+1. Re-opening a handle that sits on fd 0, 1 or 2 keeps the handle's
+   *existing* PerlIO object: `S_openn_setup()` in doio.c saves it when
+   `inRANGE(old_fd, 0, PL_maxsysfd)` (`MAXSYSFD` is 2), and
+   `S_openn_cleanup()` dup2()s the new descriptor underneath it and
+   closes the handle that was just opened, layers and all.  perl's own
+   source flags this: *"Eeek - FIXME !!! If this is a standard handle
+   we discard all the layer stuff and just dup the fd into whatever
+   was on the handle before !"*
 2. `binmode FH, ':encoding(utf8)'` pushes a new layer even when one is
    already present (perl/perl5#10454, "binmode (encoding) is not
    idempotent").
 
-The first ingredient is easy to see on its own: a fresh open resets
-the layer stack, a re-open over a dup does not.
+**Only the standard handles are affected.**  Every other handle adopts
+the layer stack of the dup source, so a saved dup acts as a snapshot
+and restoring from it brings those very layers back — the same cycle
+on an ordinary handle is stable across any number of iterations.
+Probed on ten releases, 5.12.5 through 5.44.0, all identical:
 
 ```
-re-open over a dup : unix perlio encoding(utf8) utf8
-re-open plain file : unix perlio
+STDIN=KEPT STDOUT=KEPT STDERR=KEPT bareword=ADOPTED lexical=ADOPTED
+cycle_ordinary=stable cycle_STDOUT=GROW
 ```
+
+(see [handle-asymmetry.pl](handle-asymmetry.pl))
 
 So every cycle adds one `encoding(utf8)` + `utf8` pair to STDOUT:
 

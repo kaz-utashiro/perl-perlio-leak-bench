@@ -1,25 +1,34 @@
 # Title
 
-Encoding layers accumulate without bound when a redirected filehandle is restored with open FH, '>&', ...
+Encoding layers accumulate without bound on the standard filehandles when redirected and restored with open FH, '>&', ...
 
 # Body
 
 ## Description
 
-When a filehandle is redirected and restored with `open FH, '>&', ...`
-while an `:encoding` layer is pushed in between — the natural way to
-temporarily redirect STDOUT to a file in-process — the encoding layer
-is not removed.  Repeating the cycle accumulates one layer pair per
-iteration without bound:
+When one of the standard filehandles is redirected and restored with
+`open FH, '>&', ...` while an `:encoding` layer is pushed in between —
+the natural way to temporarily redirect STDOUT to a file in-process —
+the encoding layer is not removed.  Repeating the cycle accumulates
+one layer per iteration without bound.  Two things combine:
 
-- re-opening an existing filehandle over a dup keeps the handle's
-  current layer stack instead of resetting it, and
+- re-opening a handle that sits on fd 0, 1 or 2 keeps the handle's
+  *existing* PerlIO object, dup2()ing the new descriptor underneath it
+  and throwing away the freshly opened handle together with the layers
+  the open would have given it, and
 - `binmode FH, ':encoding(utf8)'` pushes a new layer even when one is
   already present (#10454).
 
 Every subsequent operation on the handle passes through the whole
-stack, so a loop doing this is quadratic in time, and each leaked
-layer keeps its buffers, so memory grows without bound.
+stack, so a loop doing this is quadratic in time, and each layer keeps
+its buffers, so memory grows without bound.
+
+Only the standard handles are affected.  Every other handle *adopts
+the layer stack of the dup source*, which makes the same
+redirect-and-restore cycle self-cleaning: `open my $save, '>&', FH`
+snapshots the layers, and restoring from `$save` brings exactly those
+layers back.  So the idiom already works correctly — just not on the
+handles it is normally used on.
 
 ## Steps to Reproduce
 
@@ -42,25 +51,37 @@ cycle 2: unix perlio encoding(utf8) utf8 encoding(utf8) utf8
 cycle 3: unix perlio encoding(utf8) utf8 encoding(utf8) utf8 encoding(utf8) utf8
 ```
 
-The first of the two ingredients can be shown on its own.  A fresh
-open resets the handle's layer stack; a re-open over a dup keeps it:
+The difference between the standard handles and the rest is direct to
+see.  Give the handle and the dup source different layers, so that
+"kept its own" and "adopted the source's" can be told apart:
 
 ```perl
-open my $a, '>', "/tmp/a1" or die;
-binmode $a, ':encoding(utf8)';
-open my $dup, '>&', $a or die;
-open $a, '>&', $dup or die;                 # re-open over a dup
-print "over dup   : @{[ PerlIO::get_layers($a) ]}\n";
+open my $plain, '>', "/tmp/src" or die;     # dup source, no extra layers
 
-open my $b, '>', "/tmp/b1" or die;
-binmode $b, ':encoding(utf8)';
-open $b, '>', "/tmp/b2" or die;             # re-open, plain file
-print "plain file : @{[ PerlIO::get_layers($b) ]}\n";
+binmode STDOUT, ':encoding(cp932)';
+open STDOUT, '>&', $plain or die;
+warn "STDOUT  : @{[ PerlIO::get_layers(*STDOUT) ]}\n";
+
+open FH, '>', "/tmp/fh" or die;
+binmode FH, ':encoding(cp932)';
+open FH, '>&', $plain or die;
+warn "ordinary: @{[ PerlIO::get_layers(*FH) ]}\n";
 ```
 
 ```
-over dup   : unix perlio encoding(utf8) utf8
-plain file : unix perlio
+STDOUT  : unix perlio encoding(cp932) utf8      <- kept its own
+ordinary: unix perlio                           <- adopted the source's
+```
+
+Consequently the redirect/restore loop above, run on an ordinary
+handle instead of STDOUT, does not accumulate at all:
+
+```
+start   : [unix perlio]
+cycle 1 : [unix perlio]
+cycle 2 : [unix perlio]
+cycle 3 : [unix perlio]
+cycle 4 : [unix perlio]
 ```
 
 Doing 3 rounds of 300 such cycles (ubuntu-latest, perl 5.44.0):
@@ -72,31 +93,83 @@ process RSS after:   276 MB
 ```
 
 I benchmarked 5.12.5 through 5.44.0 and blead built from source: the
-behavior is identical in every version tested.  Unrelated file I/O
-through other handles is not affected.  Results and workflows:
+behavior is identical in every version tested, and so is the
+standard-handle/ordinary-handle split above —
+
+```
+RESULT perl=5.12.5 STDIN=KEPT STDOUT=KEPT STDERR=KEPT bareword=ADOPTED lexical=ADOPTED cycle_ordinary=stable cycle_STDOUT=GROW
+...
+RESULT perl=5.44.0 STDIN=KEPT STDOUT=KEPT STDERR=KEPT bareword=ADOPTED lexical=ADOPTED cycle_ordinary=stable cycle_STDOUT=GROW
+```
+
+identical for all ten releases probed.  Unrelated file I/O through
+other handles is not affected.  Results and workflows:
 https://github.com/kaz-utashiro/perl-perlio-leak-bench
 
 Replacing `:encoding(utf8)` with `:utf8`, or popping the layer with
 `binmode STDOUT, ':pop'` before restoring, avoids the problem
 entirely.
 
+## Where this comes from
+
+`S_openn_setup()` in doio.c keeps the old PerlIO object when the
+handle being re-opened is on a low descriptor:
+
+```c
+const int old_fd = PerlIO_fileno(IoIFP(io));
+
+if (inRANGE(old_fd, 0, PL_maxsysfd)) {
+    /* This is one of the original STD* handles */
+    *saveifp  = IoIFP(io);
+    ...
+```
+
+`PL_maxsysfd` is `MAXSYSFD`, 2 — so the test is really "fd 0, 1 or 2".
+`S_openn_cleanup()` then discards the handle that was just opened and
+reinstates the saved one, which is what preserves the old layer stack:
+
+```c
+/* Eeek - FIXME !!!
+ * If this is a standard handle we discard all the layer stuff
+ * and just dup the fd into whatever was on the handle before !
+ */
+
+if (saveifp) {		/* must use old fp? */
+    ...
+        PerlLIO_dup2(fd, savefd)
+    ...
+        PerlIO_close(fp);
+    }
+    fp = saveifp;
+```
+
+So the behaviour is not a deliberate guarantee; the source marks it as
+something to fix.
+
 ## Discussion
 
-Each of the two ingredients may arguably be intended behavior on its
-own — the layer-keeping of re-open over dup does not seem to be
-documented either way, and the non-idempotency of binmode is #10454 —
-but their combination turns an ordinary redirect-and-restore pattern
-into an unbounded leak that is quite hard to diagnose (the handle
-looks perfectly normal, and the slowdown creeps in gradually).
+The non-idempotency of `binmode :encoding` is #10454 and arguably
+intended.  What turns it into an unbounded accumulation is the
+standard-handle special case above, and that one looks like the part
+worth changing: every other handle already adopts the dup source's
+layers, which makes save/redirect/restore come out right by itself.
 
-Possible directions, in decreasing order of ambition:
+Possible directions:
 
-- make re-opening a filehandle reset its layer stack to the newly
-  computed one (as a fresh open does);
-- make pushing `:encoding` replace an existing topmost encoding layer
-  instead of stacking (#10454);
-- or at least document the accumulation hazard in open/binmode/perlio
-  documentation.
+- make the standard handles follow the same rule as every other
+  handle, i.e. let a re-open over a dup adopt the dup source's layer
+  stack, as the FIXME contemplates.  This both removes the
+  accumulation and makes the save/restore idiom actually restore the
+  layers that were saved;
+- or make pushing `:encoding` replace an existing topmost encoding
+  layer instead of stacking (#10454) — but that silently takes away a
+  layer the caller set when the two encodings happen to match, so it
+  is the riskier of the two;
+- or at least document the special case, which is currently not
+  mentioned under "Duping filehandles" in perlfunc, nor in PerlIO —
+  whose description of open ("the handle will be opened with the
+  layers specified by the `${^OPEN}` variable ... or the default layer
+  stack") reads as if the standard handles behaved like the rest.
 
 ## Real-world impact
 

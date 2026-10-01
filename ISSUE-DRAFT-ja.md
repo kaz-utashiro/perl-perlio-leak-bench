@@ -1,26 +1,35 @@
 # タイトル
 
-Encoding layers accumulate without bound when a redirected filehandle is restored with open FH, '>&', ...
-（リダイレクトしたファイルハンドルを open FH, '>&', ... で復元すると encoding レイヤーが際限なく蓄積する）
+Encoding layers accumulate without bound on the standard filehandles when redirected and restored with open FH, '>&', ...
+（標準ファイルハンドルをリダイレクトして open FH, '>&', ... で復元すると encoding レイヤーが際限なく蓄積する）
 
 # 本文
 
 ## Description（説明）
 
-ファイルハンドルを `open FH, '>&', ...` でリダイレクトして復元する
-際、その間に `:encoding` レイヤーを push していると — プロセス内で
-STDOUT を一時的にファイルへ向ける自然な書き方です — encoding レイ
-ヤーが除去されません。このサイクルを繰り返すと、1 回ごとにレイヤー
-が 1 組ずつ際限なく蓄積します：
+標準ファイルハンドルを `open FH, '>&', ...` でリダイレクトして復元
+する際、その間に `:encoding` レイヤーを push していると — プロセス
+内で STDOUT を一時的にファイルへ向ける自然な書き方です — encoding
+レイヤーが除去されません。サイクルを繰り返すと 1 回ごとに 1 層ずつ
+際限なく蓄積します。2 つの挙動の合成です：
 
-- dup による既存ハンドルへの再オープンは、ハンドルの現在のレイヤー
-  スタックをリセットせず温存する
+- fd 0・1・2 に載っているハンドルへの再オープンは、ハンドルの
+  *既存の* PerlIO オブジェクトを温存し、新しいディスクリプタを
+  その下に dup2 して、開いたばかりのハンドルを（本来そのオープンが
+  与えるはずだったレイヤーごと）捨てる
 - `binmode FH, ':encoding(utf8)'` は既に同じレイヤーがあっても新し
   いレイヤーを push する（#10454）
 
 以後の操作はすべてスタック全段を通るため、このループは時間的に二次
-関数となり、リークした各レイヤーはバッファを保持し続けるため、メモ
-リも際限なく増えます。
+関数となり、各レイヤーはバッファを保持し続けるため、メモリも際限な
+く増えます。
+
+**影響を受けるのは標準ハンドルだけです。** それ以外のハンドルは
+*dup 元のレイヤースタックを継承*するため、同じリダイレクト／復元の
+サイクルが自己完結します。`open my $save, '>&', FH` がレイヤーの
+スナップショットになり、`$save` からの復元がまさにそのレイヤーを
+戻すからです。つまりイディオム自体は既に正しく動いており、通常それ
+が使われるハンドルでだけ動かない、という状態です。
 
 ## Steps to Reproduce（再現手順）
 
@@ -81,22 +90,64 @@ https://github.com/kaz-utashiro/perl-perlio-leak-bench
 `binmode STDOUT, ':pop'` でレイヤーを取り除けば、問題は完全に回避で
 きます。
 
+## Where this comes from（原因の所在）
+
+doio.c の `S_openn_setup()` は、再オープン対象のハンドルが低い
+ディスクリプタに載っている場合、古い PerlIO オブジェクトを温存します：
+
+```c
+const int old_fd = PerlIO_fileno(IoIFP(io));
+
+if (inRANGE(old_fd, 0, PL_maxsysfd)) {
+    /* This is one of the original STD* handles */
+    *saveifp  = IoIFP(io);
+    ...
+```
+
+`PL_maxsysfd` は `MAXSYSFD` = 2 なので、判定は実質「fd 0・1・2 か」
+です。続く `S_openn_cleanup()` が、開いたばかりのハンドルを捨てて
+保存したものを復帰させます。これが古いレイヤースタックを残します：
+
+```c
+/* Eeek - FIXME !!!
+ * If this is a standard handle we discard all the layer stuff
+ * and just dup the fd into whatever was on the handle before !
+ */
+
+if (saveifp) {		/* must use old fp? */
+    ...
+        PerlLIO_dup2(fd, savefd)
+    ...
+        PerlIO_close(fp);
+    }
+    fp = saveifp;
+```
+
+つまりこの挙動は意図的な保証ではなく、ソース自身が直すべきものとして
+印を付けています。
+
 ## Discussion（議論）
 
-2 つの要素はそれぞれ単体では意図された挙動かもしれません — dup 再
-オープンのレイヤー温存はどちらとも文書化されていないようですし、
-binmode の非冪等性は #10454 です — が、組み合わさると、ごく普通の
-リダイレクト＆復元パターンが際限のないリークに変わります。しかも診
-断が非常に困難です（ハンドルは一見正常で、遅さは徐々に忍び寄る）。
+`binmode :encoding` の非冪等性は #10454 で、単体では意図された挙動
+とも言えます。それを際限のない蓄積に変えているのは上記の標準ハンド
+ル特例であり、変えるべきはそちらだと思われます。他のすべてのハンド
+ルは既に dup 元のレイヤーを継承しており、その結果 退避／リダイレク
+ト／復元が自然に正しく収まるからです。
 
-考えられる方向性を野心的な順に：
+考えられる方向性：
 
-- ハンドルの再オープン時にレイヤースタックを（新規オープンと同様
-  に）計算し直したものへリセットする
-- `:encoding` の push を、既存の最上位 encoding レイヤーの置き換え
-  にする（#10454）
-- 少なくとも open / binmode / perlio のドキュメントにこの蓄積の危険
-  を記載する
+- 標準ハンドルを他のハンドルと同じ規則に揃える。すなわち dup への
+  再オープンで dup 元のレイヤースタックを継承させる（FIXME が想定
+  しているのはこれです）。蓄積がなくなるだけでなく、save/restore
+  イディオムが本当に「保存したレイヤーを復元する」ようになります
+- あるいは `:encoding` の push を既存の最上位 encoding レイヤーの
+  置き換えにする（#10454）。ただし両者の encoding が一致した場合に
+  呼び出し側が設定したレイヤーを黙って奪うので、こちらの方が危険です
+- 少なくともこの特例を文書化する。現在 perlfunc の "Duping
+  filehandles" にも PerlIO にも記載がなく、PerlIO の open の説明
+  （「レイヤーが明示されなければ `${^OPEN}` のレイヤー…またはデフォ
+  ルトのレイヤースタックで開かれる」）は、標準ハンドルも他と同様に
+  振る舞うかのように読めます
 
 ## Real-world impact（実世界での影響）
 
