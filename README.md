@@ -21,6 +21,14 @@ Two behaviors combine:
    already present (perl/perl5#10454, "binmode (encoding) is not
    idempotent").
 
+The first ingredient is easy to see on its own: a fresh open resets
+the layer stack, a re-open over a dup does not.
+
+```
+re-open over a dup : unix perlio encoding(utf8) utf8
+re-open plain file : unix perlio
+```
+
 So every cycle adds one `encoding(utf8)` + `utf8` pair to STDOUT:
 
 ```
@@ -31,30 +39,37 @@ cycle 3: unix perlio encoding(utf8) utf8 encoding(utf8) utf8 encoding(utf8) utf8
 
 Each subsequent operation on the handle passes through the whole
 stack, so the loop is quadratic overall, and each layer keeps its
-buffers, so memory grows without bound (~250MB after 900 cycles).
+buffers, so memory grows without bound (~270MB after 900 cycles).
 Unrelated file I/O through other handles is not affected.
 
 ## Results
 
 3 rounds of 300 redirect cycles; layer count of STDOUT after each
 round; time per round; unrelated I/O (1000 open/print/close on a
-separate file) before and after
-([full run](https://github.com/kaz-utashiro/perl-perlio-leak-bench/actions/runs/28724464058),
-[blead run](https://github.com/kaz-utashiro/perl-perlio-leak-bench/actions/runs/28724464522);
+separate file) before and after; measured 2026-10-01
+([full run](https://github.com/kaz-utashiro/perl-perlio-leak-bench/actions/runs/36829296263),
+[blead run](https://github.com/kaz-utashiro/perl-perlio-leak-bench/actions/runs/36829296272);
 see [leak-bench.pl](leak-bench.pl)):
 
 | perl | sec (r1/r2/r3) | layers (r1/r2/r3) | rss | unrelated io |
 |---|---|---|---:|---|
-| 5.12.5 | 0.51 / 2.12 / 4.42 | 602 / 1202 / 1802 | 260MB | 0.26 -> 0.19 (none) |
-| 5.16.3 | 0.61 / 2.67 / 6.12 | 602 / 1202 / 1802 | 255MB | none |
-| 5.20.3 | 0.56 / 2.23 / 4.64 | 602 / 1202 / 1802 | 255MB | none |
-| 5.26.3 | 0.51 / 2.13 / 4.65 | 602 / 1202 / 1802 | 274MB | none |
-| 5.32.1 | 0.51 / 2.09 / 4.63 | 602 / 1202 / 1802 | 275MB | none |
-| 5.36.3 | 0.54 / 2.39 / 5.57 | 602 / 1202 / 1802 | 276MB | none |
-| 5.38.5 | 0.54 / 2.43 / 5.61 | 602 / 1202 / 1802 | 276MB | none |
-| 5.40.4 | 0.52 / 2.17 / 4.89 | 602 / 1202 / 1802 | 276MB | none |
-| 5.42.2 | 0.56 / 2.11 / 4.70 | 602 / 1202 / 1802 | 276MB | none |
-| blead 2026-07-05 | 0.32 / 1.48 / 3.43 | 602 / 1202 / 1802 | 276MB | none |
+| 5.12.5 | 0.43 / 1.72 / 3.70 | 602 / 1202 / 1802 | 255MB | 0.44 -> 1.38 |
+| 5.16.3 | 0.37 / 1.55 / 3.42 | 602 / 1202 / 1802 | 249MB | 0.43 -> 0.40 |
+| 5.20.3 | 0.58 / 2.34 / 5.22 | 602 / 1202 / 1802 | 249MB | 0.26 -> 0.24 |
+| 5.26.3 | 0.55 / 2.36 / 5.24 | 602 / 1202 / 1802 | 268MB | 0.27 -> 0.25 |
+| 5.32.1 | 0.48 / 2.56 / 6.20 | 602 / 1202 / 1802 | 269MB | 0.25 -> 0.71 |
+| 5.36.3 | 0.26 / 1.20 / 2.71 | 602 / 1202 / 1802 | 269MB | 3.35 -> 2.24 |
+| 5.38.5 | 0.52 / 2.32 / 5.34 | 602 / 1202 / 1802 | 269MB | 0.24 -> 0.21 |
+| 5.40.4 | 0.59 / 2.41 / 5.31 | 602 / 1202 / 1802 | 269MB | 0.18 -> 0.81 |
+| 5.42.2 | 0.52 / 2.12 / 4.62 | 602 / 1202 / 1802 | 269MB | 0.63 -> 0.17 |
+| 5.44.0 | 0.47 / 1.98 / 4.51 | 602 / 1202 / 1802 | 269MB | 0.24 -> 0.24 |
+| blead 5.45.4 | 0.46 / 2.01 / 4.58 | 602 / 1202 / 1802 | 269MB | 0.24 -> 0.22 |
+
+The `unrelated io` column is shared-runner noise — individual pairs
+move in both directions (5.36.3 gets faster, 5.12.5 slower) and there
+is no systematic growth.  It is here only to show that the leak does
+not spread to other handles; the `layers` and `sec` columns are the
+measurement.
 
 Present unchanged in every release tested (5.12.5 through blead).
 

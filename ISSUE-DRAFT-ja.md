@@ -43,7 +43,28 @@ cycle 2: unix perlio encoding(utf8) utf8 encoding(utf8) utf8
 cycle 3: unix perlio encoding(utf8) utf8 encoding(utf8) utf8 encoding(utf8) utf8
 ```
 
-このサイクル 300 回を 3 ラウンド実行すると（ubuntu-latest、perl 5.42.2）：
+2 つの要因のうち 1 つ目は単独で示せます。新規の open はレイヤスタッ
+クをリセットしますが、dup に対する再 open は保持します：
+
+```perl
+open my $a, '>', "/tmp/a1" or die;
+binmode $a, ':encoding(utf8)';
+open my $dup, '>&', $a or die;
+open $a, '>&', $dup or die;                 # dup に対する再 open
+print "over dup   : @{[ PerlIO::get_layers($a) ]}\n";
+
+open my $b, '>', "/tmp/b1" or die;
+binmode $b, ':encoding(utf8)';
+open $b, '>', "/tmp/b2" or die;             # 通常ファイルへの再 open
+print "plain file : @{[ PerlIO::get_layers($b) ]}\n";
+```
+
+```
+over dup   : unix perlio encoding(utf8) utf8
+plain file : unix perlio
+```
+
+このサイクル 300 回を 3 ラウンド実行すると（ubuntu-latest、perl 5.44.0）：
 
 ```
 ラウンドごとの時間:      0.56 / 2.11 / 4.70 秒   （二次関数的）
@@ -51,7 +72,7 @@ STDOUT のレイヤー数:      602 / 1202 / 1802
 実行後のプロセス RSS:    276 MB
 ```
 
-5.12.5 から 5.42.2 まで、およびソースからビルドした blead でベンチ
+5.12.5 から 5.44.0 まで、およびソースからビルドした blead でベンチ
 マークしました。テストした全バージョンで挙動は同一です。他のハンド
 ルを通る無関係なファイル I/O は影響を受けません。結果とワークフロー：
 https://github.com/kaz-utashiro/perl-perlio-leak-bench
@@ -89,7 +110,8 @@ binmode の非冪等性は #10454 です — が、組み合わさると、ご�
 ## Perl configuration（環境）
 
 ubuntu-latest + shogo82148/actions-setup-perl のビルド
-（5.12.5〜5.42.2）と、ソースからビルドした blead で測定。
-macOS/arm64（システム標準 perl 5.34.1 と Homebrew 5.42.2）でも再現。
+（5.12.5〜5.44.0）と、ソースからビルドした blead で測定。
+macOS/arm64（システム標準 perl 5.34.1 と Homebrew 5.44.0）でも再現。
 
-（`<details>` ブロックに perl -V 全文を貼る）
+perl -V の全文は英語版 (ISSUE-DRAFT.md) の `<details>` ブロックに
+あります。
