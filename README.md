@@ -82,9 +82,14 @@ Present unchanged in every release tested (5.12.5 through blead).
 
 ## Background
 
-Found in [Command::Run](https://github.com/tecolicom/Command-Run)
-(see its "PerlIO Encoding Leak" section), whose nofork mode redirects
-STDIN/STDOUT to temporary files on each execution.
+Found in [Command::Run](https://github.com/tecolicom/Command-Run),
+whose nofork mode redirects STDIN/STDOUT to temporary files on each
+execution — see its "PerlIO Encoding Layer Accumulation" section, and
+`nofork-tmpfile-reuse.md` for the longer Japanese write-up.  It looked
+like a leak there at first, hence this repository's name; the cause is
+accumulation.  Command::Run 1.02 works around it by popping the
+encoding layer before restoring the handles, which took nofork with
+`:encoding` from 316/s to 15,997/s on a 1000-iteration benchmark.
 
 Related: perl/perl5#10454, perl/perl5#24531,
 [perl-substr-bench](https://github.com/kaz-utashiro/perl-substr-bench),

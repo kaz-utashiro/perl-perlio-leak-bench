@@ -102,10 +102,28 @@ Possible directions, in decreasing order of ambition:
 
 Found in [Command::Run](https://github.com/tecolicom/Command-Run),
 which redirects STDIN/STDOUT to temporary files on each in-process
-(nofork) execution.  After ~1000 executions the process had thousands
-of stacked encoding layers, was slower than fork-per-execution, and
-kept growing.  Any long-running program using the classic
-save/redirect/restore idiom with an encoding layer will hit this.
+(nofork) execution.  After ~1000 executions the standard handles
+carried thousands of stacked encoding layers, the in-process path had
+become slower than fork-per-execution, and memory kept growing.  It
+looked like a leak at first, and the module's documentation described
+it as one, until the cause turned out to be this accumulation.
+
+The module now unwinds the layer change before restoring the handles
+— check that the topmost layer is the encoding layer, then
+`binmode FH, ':pop'` — released in 1.02.  On a 1000-iteration
+benchmark with a 100-byte input:
+
+                        before      after
+    fork                 399/s      495/s
+    nofork :encoding     316/s   15,997/s
+    nofork :utf8 (raw) 13,433/s   20,038/s
+
+The accumulation accounted for essentially the whole gap: raw mode
+was 42x faster than `:encoding` only because of it, and is now an
+optional optimization rather than a required workaround.
+
+Any long-running program using the classic save/redirect/restore
+idiom with an encoding layer will hit this.
 
 ## Perl configuration
 
