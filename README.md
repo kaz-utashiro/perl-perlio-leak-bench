@@ -84,6 +84,33 @@ measurement.
 
 Present unchanged in every release tested (5.12.5 through blead).
 
+## The other side of the same special case
+
+perl/perl5#12249 (RT 113982, 2012) reported the opposite symptom: that
+re-opening STDOUT over a dup of itself *loses* the `:utf8` layer.  Leon
+Timmermans answered it in that thread by quoting the same
+`Eeek - FIXME !!!` comment, noting it had been there since 2001.
+
+It still happens, and the reason it has looked unreproducible is that
+it depends on what STDOUT is attached to.  Measured for each
+destination kind across ten releases ([run](https://github.com/kaz-utashiro/perl-perlio-leak-bench/actions/runs/36841718499),
+see [reopen-layers.pl](reopen-layers.pl)):
+
+| STDOUT is | input side | output side | 5.12.5 – 5.44.0 |
+|---|---|---|---|
+| a character device (terminal, `/dev/null`) | kept | **lost** | CLOBBERED, all ten |
+| a regular file | kept | kept | PRESERVED, all ten |
+| a pipe | kept | kept | PRESERVED, all ten |
+
+So the input side keeps its layers — which is what accumulates, as
+measured above — while the output side is thrown away whenever
+`saveofp` is a separate PerlIO object from `saveifp`.  Two faces of the
+one special case: one loses layers, the other piles them up.
+
+Note for anyone re-measuring this: write the result somewhere other
+than STDOUT.  Printing to the handle under test changes what you
+observe.
+
 ## Workarounds
 
 - Use `:utf8` instead of `:encoding(utf8)` (no layer object with
