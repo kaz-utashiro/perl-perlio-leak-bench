@@ -21,6 +21,7 @@ jobs:
           - '5.38.5'
           - '5.40.4'
           - '5.42.2'
+          - '5.44.0'
     name: perl ${{ matrix.perl }}
     steps:
       - uses: actions/checkout@v5
